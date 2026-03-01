@@ -5,8 +5,16 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 const { execSync, spawn } = require('child_process');
 const db = require('./db');
+
+// Write YouTube cookies from env var to file (for cloud deploys)
+const COOKIES_PATH = path.join(__dirname, '..', 'cookies.txt');
+if (process.env.YT_COOKIES) {
+  fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES);
+  console.log('YouTube cookies loaded from environment');
+}
 
 function parseDurationSeconds(dur) {
   if (!dur) return 0;
@@ -87,7 +95,12 @@ app.get('/api/stream/:videoId', (req, res) => {
   res.setHeader('Content-Type', 'audio/webm');
   res.setHeader('Transfer-Encoding', 'chunked');
 
-  const proc = spawn('yt-dlp', ['-f', 'bestaudio', '-o', '-', url]);
+  const ytArgs = ['-f', 'bestaudio', '-o', '-'];
+  if (fs.existsSync(COOKIES_PATH)) {
+    ytArgs.push('--cookies', COOKIES_PATH);
+  }
+  ytArgs.push(url);
+  const proc = spawn('yt-dlp', ytArgs);
   proc.stdout.pipe(res);
   proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
   proc.on('error', () => res.status(500).end());

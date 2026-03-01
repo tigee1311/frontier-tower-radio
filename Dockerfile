@@ -12,10 +12,11 @@ WORKDIR /app
 
 # Install python3, ffmpeg, and yt-dlp (runtime deps for YouTube streaming)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3 ffmpeg curl ca-certificates && \
+    apt-get install -y --no-install-recommends python3 ffmpeg curl ca-certificates unzip && \
     curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp && \
-    apt-get remove -y curl && \
+    curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && \
+    apt-get remove -y curl unzip && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
