@@ -12,7 +12,7 @@ WORKDIR /app
 
 # Install python3, ffmpeg, and yt-dlp (runtime deps for YouTube streaming)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3 ffmpeg curl && \
+    apt-get install -y --no-install-recommends python3 ffmpeg curl ca-certificates && \
     curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp && \
     apt-get remove -y curl && \
