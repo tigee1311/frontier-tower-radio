@@ -1,0 +1,8 @@
+node_modules
+build
+radio.db
+radio.db-shm
+radio.db-wal
+uploads
+*-player-script.js
+.env
