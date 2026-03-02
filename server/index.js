@@ -87,7 +87,7 @@ if (process.env.NODE_ENV === 'production') {
 // Audio cache: download once per song, stream immediately, serve cached for subsequent listeners
 const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-const activeDownloads = new Map(); // videoId -> { proc, listeners: Set<res> }
+const activeDownloads = new Map(); // videoId -> { proc, listeners: Set<res>, chunks: Buffer[] }
 
 // Stream YouTube audio via yt-dlp (cached)
 app.get('/api/stream/:videoId', (req, res) => {
@@ -105,10 +105,14 @@ app.get('/api/stream/:videoId', (req, res) => {
     return fs.createReadStream(filePath).pipe(res);
   }
 
-  // Download already in progress — tee the stream to this listener too
+  // Download already in progress — replay buffered data then tee live stream
   if (activeDownloads.has(videoId)) {
-    activeDownloads.get(videoId).listeners.add(res);
-    res.on('close', () => activeDownloads.get(videoId)?.listeners.delete(res));
+    const download = activeDownloads.get(videoId);
+    for (const chunk of download.chunks) {
+      res.write(chunk);
+    }
+    download.listeners.add(res);
+    res.on('close', () => download.listeners.delete(res));
     return;
   }
 
@@ -124,10 +128,11 @@ app.get('/api/stream/:videoId', (req, res) => {
   const proc = spawn('yt-dlp', ytArgs);
   const tmpPath = filePath + '.tmp';
   const fileStream = fs.createWriteStream(tmpPath);
-  const download = { proc, listeners: new Set([res]) };
+  const download = { proc, listeners: new Set([res]), chunks: [] };
   activeDownloads.set(videoId, download);
 
   proc.stdout.on('data', (chunk) => {
+    download.chunks.push(chunk);
     fileStream.write(chunk);
     for (const listener of download.listeners) {
       listener.write(chunk);
