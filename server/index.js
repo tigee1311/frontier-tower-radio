@@ -7,7 +7,12 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const { execSync, spawn } = require('child_process');
+const Stripe = require('stripe');
 const db = require('./db');
+
+// Stripe setup
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
 // Admin PIN — set via ADMIN_PIN env var, defaults to '1311'
 const ADMIN_PIN = process.env.ADMIN_PIN || '1311';
@@ -83,6 +88,38 @@ const io = new Server(server, {
 });
 
 app.use(cors());
+
+// Stripe webhook needs raw body — must be before express.json()
+app.post('/api/skip/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!stripe) return res.status(500).json({ error: 'Stripe not configured' });
+
+  let event;
+  try {
+    if (STRIPE_WEBHOOK_SECRET) {
+      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+    } else {
+      event = JSON.parse(req.body);
+    }
+  } catch (err) {
+    console.error('Stripe webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const skipperName = session.metadata?.userName || 'Someone';
+    const skipperFloor = session.metadata?.userFloor || '?';
+
+    const current = getCurrentSong();
+    if (current || playbackState.isAnnouncing) {
+      broadcastActivity(`💰 ${skipperName} from Floor ${skipperFloor} paid $1 to skip the song!`);
+      advanceQueue();
+    }
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
@@ -396,6 +433,48 @@ app.post('/api/songs/:id/vote', (req, res) => {
 
   broadcastState();
   res.json({ success: true, vote: direction });
+});
+
+// --- Paid skip ---
+
+app.post('/api/skip/checkout', async (req, res) => {
+  if (!stripe) return res.status(500).json({ error: 'Payments not configured' });
+
+  const { userName, userFloor } = req.body;
+  const current = getCurrentSong();
+  if (!current && !playbackState.isAnnouncing) {
+    return res.status(400).json({ error: 'Nothing is playing to skip' });
+  }
+
+  try {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'Skip Current Song',
+            description: `Skip "${current?.title || 'current song'}" on Frontier Tower Radio`,
+          },
+          unit_amount: 100, // $1.00
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `${origin}?skipped=true`,
+      cancel_url: `${origin}?skipped=false`,
+      metadata: {
+        userName: userName || 'Anonymous',
+        userFloor: userFloor || '?',
+      },
+    });
+
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Stripe checkout error:', err);
+    res.status(500).json({ error: 'Failed to create checkout session' });
+  }
 });
 
 // --- Admin endpoints ---

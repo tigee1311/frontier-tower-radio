@@ -196,6 +196,18 @@ export function RadioProvider({ children }) {
     return data;
   }, [adminPin]);
 
+  const paidSkip = useCallback(async () => {
+    const res = await fetch(`${API_BASE}/api/skip/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userName: user?.name, userFloor: user?.floor }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // Redirect to Stripe Checkout
+    window.location.href = data.url;
+  }, [user]);
+
   const voteSong = useCallback(async (songId, direction) => {
     const res = await fetch(`${API_BASE}/api/songs/${songId}/vote`, {
       method: 'POST',
@@ -223,7 +235,7 @@ export function RadioProvider({ children }) {
       listenerCount, activities, announcement,
       isConnected,
       searchSongs, submitYouTube, submitFile, removeSong, voteSong, myVotes,
-      isAdmin, adminLogin, adminLogout, adminSkip, adminRemove, volume, adminSetVolume,
+      isAdmin, adminLogin, adminLogout, adminSkip, adminRemove, volume, adminSetVolume, paidSkip,
     }}>
       {children}
     </RadioContext.Provider>

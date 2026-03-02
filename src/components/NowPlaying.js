@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useRadio } from '../context/RadioContext';
 
 export default function NowPlaying() {
-  const { currentSong, playbackState } = useRadio();
+  const { currentSong, playbackState, paidSkip } = useRadio();
   const [elapsed, setElapsed] = useState(0);
+  const [skipping, setSkipping] = useState(false);
 
   useEffect(() => {
     if (!playbackState.startedAt) {
@@ -79,6 +80,24 @@ export default function NowPlaying() {
             </div>
           </div>
         </div>
+
+        {/* Paid skip button */}
+        <button
+          onClick={async () => {
+            setSkipping(true);
+            try { await paidSkip(); } catch { setSkipping(false); }
+          }}
+          disabled={skipping}
+          className="mt-3 w-full bg-gradient-to-r from-yellow-500/10 to-yellow-600/10 border border-yellow-500/30
+            text-yellow-400 rounded py-2 text-xs tracking-wider uppercase
+            hover:from-yellow-500/20 hover:to-yellow-600/20 hover:border-yellow-500/50
+            disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M12.5 4a.5.5 0 00-1 0v3.248L5.233 3.612C4.693 3.3 4 3.678 4 4.308v7.384c0 .63.692 1.008 1.233.696L11.5 8.752V12a.5.5 0 001 0V4z"/>
+          </svg>
+          {skipping ? 'Redirecting to payment...' : 'Skip Song — $1.00'}
+        </button>
       </div>
     </div>
   );
