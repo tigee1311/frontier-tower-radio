@@ -84,27 +84,62 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// Stream YouTube audio via yt-dlp
-app.get('/api/stream/:videoId', (req, res) => {
+// Audio cache: download once per song, serve to all listeners
+const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
+if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+const downloadInProgress = new Map(); // videoId -> Promise<filePath>
+
+function downloadAudio(videoId) {
+  if (downloadInProgress.has(videoId)) return downloadInProgress.get(videoId);
+
+  const filePath = path.join(CACHE_DIR, `${videoId}.webm`);
+  if (fs.existsSync(filePath)) return Promise.resolve(filePath);
+
+  const promise = new Promise((resolve, reject) => {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const ytArgs = ['-f', 'bestaudio', '-o', filePath, '--retries', '3'];
+    if (fs.existsSync(COOKIES_PATH)) {
+      ytArgs.push('--cookies', COOKIES_PATH);
+    }
+    ytArgs.push(url);
+
+    console.log(`Downloading audio for ${videoId}...`);
+    const proc = spawn('yt-dlp', ytArgs);
+    proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
+    proc.on('close', (code) => {
+      downloadInProgress.delete(videoId);
+      if (code === 0 && fs.existsSync(filePath)) {
+        console.log(`Cached audio for ${videoId}`);
+        resolve(filePath);
+      } else {
+        reject(new Error(`yt-dlp exited with code ${code}`));
+      }
+    });
+    proc.on('error', (err) => {
+      downloadInProgress.delete(videoId);
+      reject(err);
+    });
+  });
+
+  downloadInProgress.set(videoId, promise);
+  return promise;
+}
+
+// Stream YouTube audio via yt-dlp (cached)
+app.get('/api/stream/:videoId', async (req, res) => {
   const videoId = req.params.videoId;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
-  res.setHeader('Content-Type', 'audio/webm');
-  res.setHeader('Transfer-Encoding', 'chunked');
-
-  const ytArgs = ['-f', 'bestaudio', '-o', '-'];
-  if (fs.existsSync(COOKIES_PATH)) {
-    ytArgs.push('--cookies', COOKIES_PATH);
+  try {
+    const filePath = await downloadAudio(videoId);
+    res.setHeader('Content-Type', 'audio/webm');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    console.error(`Stream failed for ${videoId}:`, err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
   }
-  ytArgs.push(url);
-  const proc = spawn('yt-dlp', ytArgs);
-  proc.stdout.pipe(res);
-  proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-  proc.on('error', () => res.status(500).end());
-  res.on('close', () => proc.kill());
 });
 
 // File upload config
