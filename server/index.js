@@ -84,8 +84,25 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// YouTube audio is now played client-side via YouTube IFrame player.
-// No server-side downloading needed — saves memory and CPU.
+// YouTube audio is played client-side via YouTube IFrame player.
+// Lightweight fallback stream endpoint (no chunk buffering = low memory).
+app.get('/api/stream/:videoId', (req, res) => {
+  const videoId = req.params.videoId;
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return res.status(400).json({ error: 'Invalid video ID' });
+  }
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const ytArgs = ['-f', 'bestaudio[ext=m4a]/bestaudio', '-o', '-', '--retries', '3'];
+  if (fs.existsSync(COOKIES_PATH)) ytArgs.push('--cookies', COOKIES_PATH);
+  ytArgs.push(url);
+
+  res.setHeader('Content-Type', 'audio/mp4');
+  const proc = spawn('yt-dlp', ytArgs);
+  proc.stdout.pipe(res);
+  proc.stderr.on('data', () => {});
+  proc.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+  res.on('close', () => { try { proc.kill(); } catch {} });
+});
 
 // File upload config
 const storage = multer.diskStorage({
