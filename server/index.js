@@ -370,6 +370,16 @@ function advanceQueue() {
         broadcastState();
         advancing = false;
 
+        // Pre-download and resolve the NEXT song in queue while this one plays
+        const upcoming = db.prepare(`
+          SELECT * FROM songs WHERE status = 'queued' AND id != ?
+          ORDER BY upvotes DESC, created_at ASC LIMIT 1
+        `).get(next.id);
+        if (upcoming && upcoming.type === 'youtube') {
+          try { ensureAudio(upcoming.source); } catch {}
+          resolveDirectUrl(upcoming.source);
+        }
+
         // Server timer: auto-advance when song duration is up
         // Use stored duration, or fallback to 4 minutes
         const durationMs = (next.duration > 0 ? next.duration : 240) * 1000;
