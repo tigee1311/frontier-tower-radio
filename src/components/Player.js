@@ -45,7 +45,8 @@ export default function Player() {
     currentSongIdRef.current = currentSong.id;
 
     if (currentSong.type === 'youtube') {
-      audio.src = `${API_BASE}/api/stream/${currentSong.source}`;
+      // Use direct YouTube CDN URL if available (instant playback), fall back to server stream
+      audio.src = playbackState.directUrl || `${API_BASE}/api/stream/${currentSong.source}`;
     } else {
       audio.src = `${API_BASE}${currentSong.source}`;
     }

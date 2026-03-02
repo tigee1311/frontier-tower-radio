@@ -6,7 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
-const { execSync, spawn } = require('child_process');
+const { execSync, execFile, spawn } = require('child_process');
 const db = require('./db');
 
 // Write YouTube cookies from env var to file (for cloud deploys)
@@ -291,9 +291,24 @@ function advanceQueue() {
     `).get();
 
     if (next) {
-      // Pre-download audio during announcement so it's ready when clients need it
+      // Pre-download audio for caching
       if (next.type === 'youtube') {
         try { ensureAudio(next.source); } catch (err) { console.error('Pre-download failed:', err.message); }
+      }
+
+      // Resolve direct YouTube CDN URL during announcement for instant playback
+      let directUrl = null;
+      if (next.type === 'youtube') {
+        const ytUrl = `https://www.youtube.com/watch?v=${next.source}`;
+        const args = ['-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--retries', '3'];
+        if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
+        args.push(ytUrl);
+        execFile('yt-dlp', args, { timeout: 10000 }, (err, stdout) => {
+          if (!err && stdout.trim()) {
+            directUrl = stdout.trim();
+            console.log(`Direct URL resolved for ${next.source}`);
+          }
+        });
       }
 
       // Announce phase
@@ -316,6 +331,7 @@ function advanceQueue() {
           currentSong: next,
           startedAt: Date.now(),
           isAnnouncing: false,
+          directUrl,
         };
         broadcastState();
         advancing = false;
