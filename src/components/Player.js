@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useRadio } from '../context/RadioContext';
 
 const API_BASE = process.env.NODE_ENV === 'production' ? '' : `http://${window.location.hostname}:3001`;
@@ -28,28 +28,12 @@ export default function Player() {
   const { currentSong, playbackState } = useRadio();
   const audioRef = useRef(null);
   const ytPlayerRef = useRef(null);
-  const ytContainerRef = useRef(null);
   const currentSongIdRef = useRef(null);
+  const [useYT, setUseYT] = useState(true);
 
-  // Create HTML Audio element for file uploads
   useEffect(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
-    }
-  }, []);
-
-  // Create YouTube player container
-  useEffect(() => {
-    if (!ytContainerRef.current) {
-      const div = document.createElement('div');
-      div.id = 'yt-player';
-      div.style.position = 'fixed';
-      div.style.top = '-9999px';
-      div.style.left = '-9999px';
-      div.style.width = '1px';
-      div.style.height = '1px';
-      document.body.appendChild(div);
-      ytContainerRef.current = div;
     }
   }, []);
 
@@ -60,11 +44,11 @@ export default function Player() {
     }
   }, []);
 
-  // Resume playback on user interaction if paused
+  // Resume on user interaction
   useEffect(() => {
     const tryResume = () => {
       if (!currentSong || playbackState.isAnnouncing) return;
-      if (currentSong.type === 'youtube' && ytPlayerRef.current) {
+      if (useYT && ytPlayerRef.current) {
         try {
           const state = ytPlayerRef.current.getPlayerState();
           if (state !== 1) ytPlayerRef.current.playVideo();
@@ -74,20 +58,12 @@ export default function Player() {
       }
     };
     document.addEventListener('click', tryResume);
-    document.addEventListener('keydown', tryResume);
-    return () => {
-      document.removeEventListener('click', tryResume);
-      document.removeEventListener('keydown', tryResume);
-    };
-  }, [currentSong, playbackState.isAnnouncing]);
+    return () => document.removeEventListener('click', tryResume);
+  }, [currentSong, playbackState.isAnnouncing, useYT]);
 
   useEffect(() => {
     if (playbackState.isAnnouncing || !currentSong) {
-      // Stop everything during announcement or when nothing is playing
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-      }
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; }
       destroyYTPlayer();
       currentSongIdRef.current = null;
       return;
@@ -97,73 +73,97 @@ export default function Player() {
     currentSongIdRef.current = currentSong.id;
 
     if (currentSong.type === 'youtube') {
-      // Use YouTube IFrame player for instant streaming
       audioRef.current.pause();
       audioRef.current.src = '';
       destroyYTPlayer();
 
-      // Calculate how far into the song we should start (for late joiners)
       const elapsed = playbackState.startedAt
         ? Math.floor((Date.now() - playbackState.startedAt) / 1000)
         : 0;
 
-      onYTReady(() => {
-        // Recreate container div if destroyed
-        if (!document.getElementById('yt-player')) {
-          const div = document.createElement('div');
-          div.id = 'yt-player';
-          div.style.position = 'fixed';
-          div.style.top = '-9999px';
-          div.style.left = '-9999px';
-          div.style.width = '1px';
-          div.style.height = '1px';
-          document.body.appendChild(div);
-          ytContainerRef.current = div;
-        }
+      // Ensure container div exists
+      let container = document.getElementById('yt-player-wrap');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'yt-player-wrap';
+        container.style.cssText = 'position:fixed;bottom:0;left:0;width:1px;height:1px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1;';
+        document.body.appendChild(container);
+      }
+      let playerDiv = document.getElementById('yt-player');
+      if (!playerDiv) {
+        playerDiv = document.createElement('div');
+        playerDiv.id = 'yt-player';
+        container.appendChild(playerDiv);
+      }
 
-        ytPlayerRef.current = new window.YT.Player('yt-player', {
-          videoId: currentSong.source,
-          playerVars: {
-            autoplay: 1,
-            start: elapsed,
-            controls: 0,
-            disablekb: 1,
-            fs: 0,
-            modestbranding: 1,
-            rel: 0,
-          },
-          events: {
-            onReady: (event) => {
-              event.target.playVideo();
+      onYTReady(() => {
+        // Re-check in case song changed during API load
+        if (currentSongIdRef.current !== currentSong.id) return;
+
+        try {
+          ytPlayerRef.current = new window.YT.Player('yt-player', {
+            width: '320',
+            height: '180',
+            videoId: currentSong.source,
+            playerVars: {
+              autoplay: 1,
+              start: elapsed,
+              playsinline: 1,
+              controls: 0,
+              disablekb: 1,
+              fs: 0,
+              rel: 0,
             },
-            onError: (event) => {
-              console.warn('YouTube player error:', event.data);
-              // Fallback to server stream
-              const audio = audioRef.current;
-              audio.src = `${API_BASE}/api/stream/${currentSong.source}`;
-              audio.play().catch(() => {});
+            events: {
+              onReady: (event) => {
+                event.target.setVolume(100);
+                event.target.playVideo();
+              },
+              onStateChange: (event) => {
+                // If unstarted (-1) for too long, fall back
+                if (event.data === -1) {
+                  setTimeout(() => {
+                    if (ytPlayerRef.current) {
+                      try {
+                        const state = ytPlayerRef.current.getPlayerState();
+                        if (state === -1 || state === 5) {
+                          console.warn('YT player stuck, falling back to audio stream');
+                          fallbackToStream();
+                        }
+                      } catch {}
+                    }
+                  }, 5000);
+                }
+              },
+              onError: () => {
+                console.warn('YT player error, falling back to audio stream');
+                fallbackToStream();
+              },
             },
-          },
-        });
+          });
+        } catch {
+          fallbackToStream();
+        }
       });
+
+      const fallbackToStream = () => {
+        destroyYTPlayer();
+        setUseYT(false);
+        const audio = audioRef.current;
+        audio.src = `${API_BASE}/api/stream/${currentSong.source}`;
+        audio.play().catch(() => {});
+      };
     } else {
-      // File upload — use HTML Audio element
       destroyYTPlayer();
       const audio = audioRef.current;
       audio.src = `${API_BASE}${currentSong.source}`;
-      audio.play().catch((err) => {
-        console.warn('Autoplay blocked:', err.message);
-      });
+      audio.play().catch(() => {});
     }
   }, [currentSong, playbackState.isAnnouncing, playbackState.startedAt, destroyYTPlayer]);
 
-  // Cleanup
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-      }
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; }
       destroyYTPlayer();
     };
   }, [destroyYTPlayer]);
