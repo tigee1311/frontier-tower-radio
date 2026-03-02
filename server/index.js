@@ -204,21 +204,46 @@ function ensureAudio(videoId) {
 }
 
 // Stream YouTube audio
-app.get('/api/stream/:videoId', (req, res) => {
+app.get('/api/stream/:videoId', async (req, res) => {
   const videoId = req.params.videoId;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
-
   // Already cached — serve from disk
   const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
   if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
     return fs.createReadStream(filePath).pipe(res);
   }
 
-  // Join active download — replay buffered chunks then tee live data
+  // Check pre-resolved direct URL
+  if (directUrlCache.has(videoId)) {
+    try { ensureAudio(videoId); } catch {}
+    return res.redirect(directUrlCache.get(videoId));
+  }
+
+  // Get direct YouTube CDN URL and redirect (much faster than proxying)
+  try {
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const args = ['-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--retries', '3'];
+    if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
+    args.push(url);
+    const directUrl = await new Promise((resolve, reject) => {
+      execFile('yt-dlp', args, { timeout: 15000 }, (err, stdout) => {
+        if (err) reject(err); else resolve(stdout.trim());
+      });
+    });
+    directUrlCache.set(videoId, directUrl);
+    // Start background download for caching
+    try { ensureAudio(videoId); } catch {}
+    return res.redirect(directUrl);
+  } catch (err) {
+    console.error(`Direct URL failed for ${videoId}, falling back to stream:`, err.message);
+  }
+
+  // Fallback: stream through server
+  res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
   const download = startDownload(videoId);
   for (const chunk of download.chunks) {
     res.write(chunk);
