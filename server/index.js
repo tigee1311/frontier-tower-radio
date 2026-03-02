@@ -406,6 +406,9 @@ app.post('/api/songs/youtube', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(song.id, song.title, song.type, song.source, song.user_id, song.user_name, song.user_floor, song.status, song.upvotes, song.duration, song.created_at);
 
+  // Start downloading audio immediately so it's cached by the time it plays
+  try { ensureAudio(videoId); } catch (err) { console.error('Pre-download failed:', err.message); }
+
   broadcastActivity(`🎵 ${userName} from Floor ${userFloor} just queued up "${song.title}"`);
   broadcastState();
 
