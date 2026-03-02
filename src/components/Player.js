@@ -25,7 +25,7 @@ function onYTReady(cb) {
 }
 
 export default function Player() {
-  const { currentSong, playbackState } = useRadio();
+  const { currentSong, playbackState, volume } = useRadio();
   const audioRef = useRef(null);
   const ytPlayerRef = useRef(null);
   const currentSongIdRef = useRef(null);
@@ -43,6 +43,16 @@ export default function Player() {
       ytPlayerRef.current = null;
     }
   }, []);
+
+  // Apply global volume
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = (volume || 100) / 100;
+    }
+    if (ytPlayerRef.current) {
+      try { ytPlayerRef.current.setVolume(volume || 100); } catch {}
+    }
+  }, [volume]);
 
   // Resume on user interaction
   useEffect(() => {
@@ -116,7 +126,7 @@ export default function Player() {
             },
             events: {
               onReady: (event) => {
-                event.target.setVolume(100);
+                event.target.setVolume(volume || 100);
                 event.target.playVideo();
               },
               onStateChange: (event) => {

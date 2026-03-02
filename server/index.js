@@ -9,6 +9,12 @@ const fs = require('fs');
 const { execSync, spawn } = require('child_process');
 const db = require('./db');
 
+// Admin PIN — set via ADMIN_PIN env var, defaults to '1311'
+const ADMIN_PIN = process.env.ADMIN_PIN || '1311';
+
+// Global volume (0-100), broadcast to all clients
+let globalVolume = 100;
+
 // Write YouTube cookies from env var to file (for cloud deploys)
 const COOKIES_PATH = path.join(__dirname, '..', 'cookies.txt');
 if (process.env.YT_COOKIES) {
@@ -158,6 +164,7 @@ function broadcastState() {
     playbackState,
     listenerCount: listeners.size,
     listeners: listenerList,
+    volume: globalVolume,
   });
 }
 
@@ -242,6 +249,7 @@ app.get('/api/state', (req, res) => {
     listenerCount: listeners.size,
     listeners: listenerList,
     recentActivity: recentActivity.reverse(),
+    volume: globalVolume,
   });
 });
 
@@ -390,6 +398,60 @@ app.post('/api/songs/:id/vote', (req, res) => {
   res.json({ success: true, vote: direction });
 });
 
+// --- Admin endpoints ---
+
+app.post('/api/admin/login', (req, res) => {
+  const { pin } = req.body;
+  if (pin === ADMIN_PIN) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Invalid PIN' });
+  }
+});
+
+app.post('/api/admin/skip', (req, res) => {
+  const { pin } = req.body;
+  if (pin !== ADMIN_PIN) return res.status(401).json({ error: 'Unauthorized' });
+
+  const current = getCurrentSong();
+  if (!current && !playbackState.isAnnouncing) {
+    return res.status(400).json({ error: 'Nothing is playing' });
+  }
+
+  broadcastActivity('⏭️ Admin skipped the current song');
+  advanceQueue();
+  res.json({ success: true });
+});
+
+app.post('/api/admin/remove/:id', (req, res) => {
+  const { id } = req.params;
+  const { pin } = req.body;
+  if (pin !== ADMIN_PIN) return res.status(401).json({ error: 'Unauthorized' });
+
+  const song = db.prepare(`SELECT * FROM songs WHERE id = ? AND status = 'queued'`).get(id);
+  if (!song) return res.status(404).json({ error: 'Song not found in queue' });
+
+  db.prepare(`DELETE FROM songs WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM votes WHERE song_id = ?`).run(id);
+
+  broadcastActivity(`🗑️ Admin removed "${song.title}" from the queue`);
+  broadcastState();
+  res.json({ success: true });
+});
+
+app.post('/api/admin/volume', (req, res) => {
+  const { pin, volume } = req.body;
+  if (pin !== ADMIN_PIN) return res.status(401).json({ error: 'Unauthorized' });
+
+  globalVolume = Math.max(0, Math.min(100, Number(volume) || 100));
+  io.emit('volume', globalVolume);
+  res.json({ success: true, volume: globalVolume });
+});
+
+app.get('/api/admin/volume', (req, res) => {
+  res.json({ volume: globalVolume });
+});
+
 function extractYouTubeId(url) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
@@ -431,6 +493,7 @@ io.on('connection', (socket) => {
       listenerCount: listeners.size,
       listeners: listenerList,
       recentActivity: recentActivity.reverse(),
+      volume: globalVolume,
     });
   });
 

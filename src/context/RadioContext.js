@@ -23,6 +23,9 @@ export function RadioProvider({ children }) {
   const [announcement, setAnnouncement] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [myVotes, setMyVotes] = useState({});
+  const [isAdmin, setIsAdmin] = useState(() => !!sessionStorage.getItem('admin-pin'));
+  const [adminPin, setAdminPin] = useState(() => sessionStorage.getItem('admin-pin') || '');
+  const [volume, setVolume] = useState(100);
   const socketRef = useRef(null);
 
   const login = useCallback((name, floor) => {
@@ -62,9 +65,14 @@ export function RadioProvider({ children }) {
       setCurrentSong(state.currentSong || null);
       setPlaybackState(state.playbackState || {});
       setListenerCount(state.listenerCount || 0);
+      if (state.volume !== undefined) setVolume(state.volume);
       if (state.recentActivity) {
         setActivities(state.recentActivity);
       }
+    });
+
+    socket.on('volume', (vol) => {
+      setVolume(vol);
     });
 
     socket.on('activity', (activity) => {
@@ -135,6 +143,59 @@ export function RadioProvider({ children }) {
     return data;
   }, [user]);
 
+  const adminLogin = useCallback(async (pin) => {
+    const res = await fetch(`${API_BASE}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    sessionStorage.setItem('admin-pin', pin);
+    setAdminPin(pin);
+    setIsAdmin(true);
+    return data;
+  }, []);
+
+  const adminLogout = useCallback(() => {
+    sessionStorage.removeItem('admin-pin');
+    setAdminPin('');
+    setIsAdmin(false);
+  }, []);
+
+  const adminSkip = useCallback(async () => {
+    const res = await fetch(`${API_BASE}/api/admin/skip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: adminPin }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  }, [adminPin]);
+
+  const adminRemove = useCallback(async (songId) => {
+    const res = await fetch(`${API_BASE}/api/admin/remove/${songId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: adminPin }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  }, [adminPin]);
+
+  const adminSetVolume = useCallback(async (vol) => {
+    const res = await fetch(`${API_BASE}/api/admin/volume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: adminPin, volume: vol }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  }, [adminPin]);
+
   const voteSong = useCallback(async (songId, direction) => {
     const res = await fetch(`${API_BASE}/api/songs/${songId}/vote`, {
       method: 'POST',
@@ -162,6 +223,7 @@ export function RadioProvider({ children }) {
       listenerCount, activities, announcement,
       isConnected,
       searchSongs, submitYouTube, submitFile, removeSong, voteSong, myVotes,
+      isAdmin, adminLogin, adminLogout, adminSkip, adminRemove, volume, adminSetVolume,
     }}>
       {children}
     </RadioContext.Provider>

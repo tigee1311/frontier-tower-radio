@@ -7,14 +7,16 @@ import ActivityFeed from './ActivityFeed';
 import Announcement from './Announcement';
 import Visualizer from './Visualizer';
 import Player from './Player';
+import AdminPanel from './AdminPanel';
 
 export default function RadioPage() {
-  const { user, logout, listenerCount, isConnected, announcement } = useRadio();
+  const { user, logout, listenerCount, isConnected, announcement, isAdmin } = useRadio();
 
   return (
     <div className="min-h-screen radio-static">
       {announcement && <Announcement data={announcement} />}
       <Player />
+      {!isAdmin && <AdminPanel />}
 
       {/* Header */}
       <header className="border-b border-tower-border bg-tower-darker/80 backdrop-blur-sm sticky top-0 z-40">
@@ -75,6 +77,7 @@ export default function RadioPage() {
 
           {/* Right column: Queue + Activity */}
           <div className="space-y-6">
+            {isAdmin && <AdminPanel />}
             <Queue />
             <ActivityFeed />
           </div>
