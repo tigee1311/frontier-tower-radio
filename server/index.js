@@ -84,61 +84,97 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// Audio cache: pre-download as MP3 (works on all browsers including Safari)
+// Audio cache: stream as MP3 via yt-dlp | ffmpeg pipe (works on all browsers)
 const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-const downloadInProgress = new Map(); // videoId -> Promise<filePath>
+const activeDownloads = new Map(); // videoId -> { ffmpeg, listeners, chunks }
 
-function ensureAudio(videoId) {
+function startDownload(videoId) {
+  if (activeDownloads.has(videoId)) return activeDownloads.get(videoId);
+
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const ytArgs = ['-f', 'bestaudio', '-o', '-', '--retries', '3'];
+  if (fs.existsSync(COOKIES_PATH)) {
+    ytArgs.push('--cookies', COOKIES_PATH);
+  }
+  ytArgs.push(url);
+
+  console.log(`Streaming audio for ${videoId}...`);
+  const ytdlp = spawn('yt-dlp', ytArgs);
+  // Pipe yt-dlp output through ffmpeg to transcode to MP3 in real-time
+  const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-ab', '192k', 'pipe:1'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  ytdlp.stdout.pipe(ffmpeg.stdin);
+  ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
+  ffmpeg.stderr.on('data', () => {}); // suppress ffmpeg logs
+
   const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
-  if (fs.existsSync(filePath)) return Promise.resolve(filePath);
-  if (downloadInProgress.has(videoId)) return downloadInProgress.get(videoId);
+  const tmpPath = filePath + '.tmp';
+  const fileStream = fs.createWriteStream(tmpPath);
+  const download = { ffmpeg, ytdlp, listeners: new Set(), chunks: [] };
+  activeDownloads.set(videoId, download);
 
-  const promise = new Promise((resolve, reject) => {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytArgs = ['-x', '--audio-format', 'mp3', '-o', filePath, '--retries', '3'];
-    if (fs.existsSync(COOKIES_PATH)) {
-      ytArgs.push('--cookies', COOKIES_PATH);
+  ffmpeg.stdout.on('data', (chunk) => {
+    download.chunks.push(chunk);
+    fileStream.write(chunk);
+    for (const listener of download.listeners) {
+      listener.write(chunk);
     }
-    ytArgs.push(url);
-
-    console.log(`Pre-downloading audio for ${videoId}...`);
-    const proc = spawn('yt-dlp', ytArgs);
-    proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-    proc.on('close', (code) => {
-      downloadInProgress.delete(videoId);
-      if (code === 0 && fs.existsSync(filePath)) {
-        console.log(`Cached audio for ${videoId}`);
-        resolve(filePath);
-      } else {
-        reject(new Error(`yt-dlp exited with code ${code}`));
-      }
-    });
-    proc.on('error', (err) => {
-      downloadInProgress.delete(videoId);
-      reject(err);
-    });
   });
 
-  downloadInProgress.set(videoId, promise);
-  return promise;
+  ffmpeg.on('close', (code) => {
+    fileStream.end();
+    for (const listener of download.listeners) {
+      listener.end();
+    }
+    activeDownloads.delete(videoId);
+    if (code === 0 && fs.existsSync(tmpPath)) {
+      fs.renameSync(tmpPath, filePath);
+      console.log(`Cached audio for ${videoId}`);
+    } else {
+      fs.unlink(tmpPath, () => {});
+    }
+  });
+
+  ytdlp.on('error', () => ffmpeg.stdin.end());
+  ffmpeg.on('error', () => {
+    for (const listener of download.listeners) listener.end();
+    activeDownloads.delete(videoId);
+  });
+
+  return download;
 }
 
-// Stream YouTube audio (serves cached MP3)
-app.get('/api/stream/:videoId', async (req, res) => {
+// Pre-download: start the pipeline early so data is cached
+function ensureAudio(videoId) {
+  const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
+  if (fs.existsSync(filePath)) return;
+  startDownload(videoId);
+}
+
+// Stream YouTube audio as MP3
+app.get('/api/stream/:videoId', (req, res) => {
   const videoId = req.params.videoId;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  try {
-    const filePath = await ensureAudio(videoId);
-    res.setHeader('Content-Type', 'audio/mpeg');
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    console.error(`Stream failed for ${videoId}:`, err.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
+  res.setHeader('Content-Type', 'audio/mpeg');
+
+  // Already cached — serve from disk
+  const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
+  if (fs.existsSync(filePath)) {
+    return fs.createReadStream(filePath).pipe(res);
   }
+
+  // Join active download — replay buffered chunks then tee live data
+  const download = startDownload(videoId);
+  for (const chunk of download.chunks) {
+    res.write(chunk);
+  }
+  download.listeners.add(res);
+  res.on('close', () => download.listeners.delete(res));
 });
 
 // File upload config
