@@ -64,7 +64,7 @@ export default function AdminPanel() {
             onChange={(e) => { setPin(e.target.value); setError(''); }}
             placeholder="Enter admin PIN"
             className="w-full bg-tower-dark border border-tower-border rounded px-3 py-2 text-tower-text
-              placeholder-tower-muted/40 focus:outline-none focus:border-tower-accent/50 font-mono text-sm"
+              placeholder-tower-muted/40 focus:outline-none focus:border-tower-accent/50 text-sm"
             autoFocus
           />
           {error && <p className="text-red-400 text-xs">{error}</p>}
@@ -115,7 +115,7 @@ export default function AdminPanel() {
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-tower-muted text-xs tracking-wider uppercase">Volume</span>
-          <span className="text-tower-text text-xs font-mono">{volume}%</span>
+          <span className="text-tower-text text-xs tabular-nums">{volume}%</span>
         </div>
         <input
           type="range"

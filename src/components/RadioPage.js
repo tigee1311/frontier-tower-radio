@@ -23,17 +23,13 @@ export default function RadioPage() {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <svg viewBox="0 0 24 30" className="w-5 h-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <line x1="12" y1="2" x2="12" y2="26" className="stroke-tower-accent" />
-                <line x1="6" y1="26" x2="18" y2="26" className="stroke-tower-accent" />
-                <circle cx="12" cy="2" r="1.5" className="fill-tower-accent stroke-tower-accent" />
-                <path d="M 15 5 Q 18 2 15 -1" className="stroke-tower-accent/50" fill="none" strokeWidth="1" />
-                <path d="M 9 5 Q 6 2 9 -1" className="stroke-tower-accent/50" fill="none" strokeWidth="1" />
-              </svg>
-              <h1 className="font-display text-sm font-bold text-tower-accent tracking-wider hidden sm:block">
-                FRONTIER TOWER RADIO
+              <div className="w-6 h-6 rounded bg-tower-accent flex items-center justify-center">
+                <span className="text-white text-xs font-display font-bold">FT</span>
+              </div>
+              <h1 className="font-display text-sm font-semibold text-tower-text tracking-wide hidden sm:block">
+                Frontier Tower <span className="text-tower-accent">Radio</span>
               </h1>
-              <h1 className="font-display text-sm font-bold text-tower-accent tracking-wider sm:hidden">
+              <h1 className="font-display text-sm font-semibold text-tower-accent sm:hidden">
                 FTR
               </h1>
             </div>

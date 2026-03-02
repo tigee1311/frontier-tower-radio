@@ -9,17 +9,22 @@ module.exports = {
           darker: '#06060a',
           panel: '#12121c',
           border: '#1e1e2e',
-          accent: '#ff6b35',
-          glow: '#ff8c5a',
-          blue: '#4a9eff',
-          green: '#00ff88',
+          accent: '#764AE2',
+          glow: '#A86EDC',
+          blue: '#4A90E2',
+          green: '#ABF882',
           muted: '#6b7280',
           text: '#e2e8f0',
+          purple: {
+            deep: '#321970',
+            light: '#EBE5FB',
+            vivid: '#5D1DFE',
+          }
         }
       },
       fontFamily: {
-        mono: ['"JetBrains Mono"', 'monospace'],
-        display: ['"Orbitron"', 'sans-serif'],
+        sans: ['"Plus Jakarta Sans"', 'Arial', 'sans-serif'],
+        display: ['"Outfit"', 'Arial', 'sans-serif'],
       },
       animation: {
         'pulse-glow': 'pulseGlow 2s ease-in-out infinite',

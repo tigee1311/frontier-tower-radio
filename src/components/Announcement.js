@@ -31,7 +31,7 @@ export default function Announcement({ data }) {
         <h2 className="font-display text-2xl sm:text-3xl font-bold text-tower-accent glow-text mb-3 max-w-lg mx-auto">
           {data.title}
         </h2>
-        <p className="text-tower-text/80 text-sm font-mono">
+        <p className="text-tower-text/80 text-sm">
           Requested by{' '}
           <span className="text-tower-accent font-medium">{data.name}</span>
           {' '}from{' '}

@@ -37,7 +37,7 @@ export default function Visualizer() {
             style={{
               height: `${height}px`,
               background: currentSong
-                ? `linear-gradient(to top, #ff6b35, #ff8c5a${height > 20 ? ', #ffaa80' : ''})`
+                ? `linear-gradient(to top, #764AE2, #A86EDC${height > 20 ? ', #c9a5f0' : ''})`
                 : '#1e1e2e',
               opacity: currentSong ? 0.6 + (height / 32) * 0.4 : 0.3,
             }}

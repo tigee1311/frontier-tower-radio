@@ -58,26 +58,36 @@ export default function EntryPage() {
       </div>
 
       <div className="relative z-10 w-full max-w-md mx-4">
-        {/* Tower antenna icon */}
+        {/* Frontier Tower branding */}
         <div className="text-center mb-8">
-          <div className="inline-block relative">
-            <svg viewBox="0 0 64 80" className="w-16 h-20 mx-auto mb-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="32" y1="4" x2="32" y2="70" className="stroke-tower-accent" />
-              <line x1="20" y1="70" x2="44" y2="70" className="stroke-tower-accent" />
-              <line x1="24" y1="55" x2="40" y2="55" className="stroke-tower-accent/60" />
-              <line x1="26" y1="40" x2="38" y2="40" className="stroke-tower-accent/40" />
-              <circle cx="32" cy="4" r="3" className="fill-tower-accent stroke-tower-accent" />
+          <div className="inline-block relative mb-4">
+            <svg viewBox="0 0 64 80" className="w-14 h-18 mx-auto" fill="none" stroke="currentColor" strokeWidth="1.5">
+              {/* Building outline */}
+              <rect x="14" y="16" width="36" height="58" rx="2" className="stroke-tower-accent" strokeWidth="1.5" />
+              {/* Floors */}
+              {[26, 36, 46, 56, 66].map((y, i) => (
+                <line key={i} x1="14" y1={y} x2="50" y2={y} className="stroke-tower-accent/30" strokeWidth="0.75" />
+              ))}
+              {/* Windows */}
+              {[22, 32, 42, 52, 62].map((y, i) => (
+                <g key={i}>
+                  <rect x="20" y={y} width="5" height="4" rx="0.5" className="fill-tower-accent/40" />
+                  <rect x="30" y={y} width="5" height="4" rx="0.5" className="fill-tower-accent/20" />
+                  <rect x="40" y={y} width="5" height="4" rx="0.5" className="fill-tower-accent/40" />
+                </g>
+              ))}
+              {/* Antenna */}
+              <line x1="32" y1="4" x2="32" y2="16" className="stroke-tower-accent" />
+              <circle cx="32" cy="4" r="2.5" className="fill-tower-accent stroke-tower-accent" />
               {/* Signal waves */}
-              <path d="M 40 12 Q 48 4 40 -4" className="stroke-tower-accent/50" fill="none" />
-              <path d="M 44 16 Q 56 4 44 -8" className="stroke-tower-accent/30" fill="none" />
-              <path d="M 24 12 Q 16 4 24 -4" className="stroke-tower-accent/50" fill="none" />
-              <path d="M 20 16 Q 8 4 20 -8" className="stroke-tower-accent/30" fill="none" />
+              <path d="M 38 8 Q 42 4 38 0" className="stroke-tower-glow/50" fill="none" strokeWidth="1" />
+              <path d="M 26 8 Q 22 4 26 0" className="stroke-tower-glow/50" fill="none" strokeWidth="1" />
             </svg>
           </div>
-          <h1 className="font-display text-3xl font-bold text-tower-accent glow-text tracking-wider">
-            FRONTIER TOWER
+          <h1 className="font-display text-3xl font-bold text-tower-text tracking-wide">
+            Frontier Tower
           </h1>
-          <h2 className="font-display text-lg text-tower-glow/80 tracking-[0.3em] mt-1">
+          <h2 className="font-display text-lg text-tower-accent tracking-[0.2em] mt-1 font-medium">
             RADIO
           </h2>
           <p className="text-tower-muted text-sm mt-4 font-light">
@@ -104,7 +114,7 @@ export default function EntryPage() {
                 placeholder="Enter your name..."
                 className="w-full bg-tower-dark border border-tower-border rounded px-4 py-3 text-tower-text
                   placeholder-tower-muted/40 focus:outline-none focus:border-tower-accent/50 focus:ring-1
-                  focus:ring-tower-accent/20 transition-all font-mono text-sm"
+                  focus:ring-tower-accent/20 transition-all text-sm"
                 maxLength={30}
               />
             </div>
@@ -123,7 +133,7 @@ export default function EntryPage() {
                   max="16"
                   className="w-full bg-tower-dark border border-tower-border rounded px-4 py-3 text-tower-text
                     placeholder-tower-muted/40 focus:outline-none focus:border-tower-accent/50 focus:ring-1
-                    focus:ring-tower-accent/20 transition-all font-mono text-sm"
+                    focus:ring-tower-accent/20 transition-all text-sm"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-tower-muted/30 text-xs">
                   FL
