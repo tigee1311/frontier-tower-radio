@@ -14,6 +14,22 @@ export default function Player() {
     }
   }, []);
 
+  // Resume playback on any user interaction if audio is paused but should be playing
+  useEffect(() => {
+    const tryResume = () => {
+      const audio = audioRef.current;
+      if (audio && audio.src && audio.paused && currentSong && !playbackState.isAnnouncing) {
+        audio.play().catch(() => {});
+      }
+    };
+    document.addEventListener('click', tryResume);
+    document.addEventListener('keydown', tryResume);
+    return () => {
+      document.removeEventListener('click', tryResume);
+      document.removeEventListener('keydown', tryResume);
+    };
+  }, [currentSong, playbackState.isAnnouncing]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -34,7 +50,10 @@ export default function Player() {
       audio.src = `${API_BASE}${currentSong.source}`;
     }
 
-    audio.play().catch(() => {});
+    audio.play().catch((err) => {
+      console.warn('Autoplay blocked:', err.message);
+      // Browser blocked autoplay — the interaction listeners above will retry
+    });
   }, [currentSong, playbackState.isAnnouncing]);
 
   // Cleanup

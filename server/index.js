@@ -84,38 +84,75 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// Audio cache: stream as MP3 via yt-dlp | ffmpeg pipe (works on all browsers)
+// Audio cache: stream via yt-dlp, use ffmpeg for MP3 if available
 const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-const activeDownloads = new Map(); // videoId -> { ffmpeg, listeners, chunks }
+const activeDownloads = new Map(); // videoId -> { proc, listeners, chunks }
+
+// Detect ffmpeg availability at startup
+let HAS_FFMPEG = false;
+try { execSync('ffmpeg -version', { stdio: 'ignore' }); HAS_FFMPEG = true; } catch {}
+console.log(`ffmpeg available: ${HAS_FFMPEG}`);
+
+const AUDIO_EXT = HAS_FFMPEG ? 'mp3' : 'm4a';
+const AUDIO_CONTENT_TYPE = HAS_FFMPEG ? 'audio/mpeg' : 'audio/mp4';
 
 function startDownload(videoId) {
   if (activeDownloads.has(videoId)) return activeDownloads.get(videoId);
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const ytArgs = ['-f', 'bestaudio', '-o', '-', '--retries', '3'];
-  if (fs.existsSync(COOKIES_PATH)) {
-    ytArgs.push('--cookies', COOKIES_PATH);
-  }
-  ytArgs.push(url);
-
-  console.log(`Streaming audio for ${videoId}...`);
-  const ytdlp = spawn('yt-dlp', ytArgs);
-  // Pipe yt-dlp output through ffmpeg to transcode to MP3 in real-time
-  const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-ab', '192k', 'pipe:1'], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  ytdlp.stdout.pipe(ffmpeg.stdin);
-  ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-  ffmpeg.stderr.on('data', () => {}); // suppress ffmpeg logs
-
-  const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
+  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
   const tmpPath = filePath + '.tmp';
   const fileStream = fs.createWriteStream(tmpPath);
-  const download = { ffmpeg, ytdlp, listeners: new Set(), chunks: [] };
+
+  console.log(`Streaming audio for ${videoId} (format: ${AUDIO_EXT})...`);
+
+  let outputStream;
+  let download;
+
+  if (HAS_FFMPEG) {
+    // yt-dlp → ffmpeg → MP3 pipeline
+    const ytArgs = ['-f', 'bestaudio', '-o', '-', '--retries', '3'];
+    if (fs.existsSync(COOKIES_PATH)) ytArgs.push('--cookies', COOKIES_PATH);
+    ytArgs.push(url);
+
+    const ytdlp = spawn('yt-dlp', ytArgs);
+    const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-ab', '192k', 'pipe:1'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    ytdlp.stdout.pipe(ffmpeg.stdin);
+    ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
+    ffmpeg.stderr.on('data', () => {});
+
+    outputStream = ffmpeg.stdout;
+    download = { proc: ffmpeg, ytdlp, listeners: new Set(), chunks: [] };
+
+    ytdlp.on('error', () => ffmpeg.stdin.end());
+    ffmpeg.on('error', () => {
+      for (const listener of download.listeners) listener.end();
+      activeDownloads.delete(videoId);
+    });
+  } else {
+    // Direct yt-dlp → m4a (AAC) stream, no ffmpeg needed
+    const ytArgs = ['-f', 'bestaudio[ext=m4a]/bestaudio', '-o', '-', '--retries', '3'];
+    if (fs.existsSync(COOKIES_PATH)) ytArgs.push('--cookies', COOKIES_PATH);
+    ytArgs.push(url);
+
+    const ytdlp = spawn('yt-dlp', ytArgs);
+    ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
+
+    outputStream = ytdlp.stdout;
+    download = { proc: ytdlp, listeners: new Set(), chunks: [] };
+
+    ytdlp.on('error', () => {
+      for (const listener of download.listeners) listener.end();
+      activeDownloads.delete(videoId);
+    });
+  }
+
   activeDownloads.set(videoId, download);
 
-  ffmpeg.stdout.on('data', (chunk) => {
+  outputStream.on('data', (chunk) => {
     download.chunks.push(chunk);
     fileStream.write(chunk);
     for (const listener of download.listeners) {
@@ -123,7 +160,7 @@ function startDownload(videoId) {
     }
   });
 
-  ffmpeg.on('close', (code) => {
+  download.proc.on('close', (code) => {
     fileStream.end();
     for (const listener of download.listeners) {
       listener.end();
@@ -137,33 +174,27 @@ function startDownload(videoId) {
     }
   });
 
-  ytdlp.on('error', () => ffmpeg.stdin.end());
-  ffmpeg.on('error', () => {
-    for (const listener of download.listeners) listener.end();
-    activeDownloads.delete(videoId);
-  });
-
   return download;
 }
 
-// Pre-download: start the pipeline early so data is cached
+// Pre-download: start the pipeline early so data is ready
 function ensureAudio(videoId) {
-  const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
+  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
   if (fs.existsSync(filePath)) return;
   startDownload(videoId);
 }
 
-// Stream YouTube audio as MP3
+// Stream YouTube audio
 app.get('/api/stream/:videoId', (req, res) => {
   const videoId = req.params.videoId;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
 
   // Already cached — serve from disk
-  const filePath = path.join(CACHE_DIR, `${videoId}.mp3`);
+  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
   if (fs.existsSync(filePath)) {
     return fs.createReadStream(filePath).pipe(res);
   }
@@ -247,58 +278,63 @@ function advanceQueue() {
   if (advancing) return;
   advancing = true;
 
-  // Clear any existing timer
-  if (songTimer) { clearTimeout(songTimer); songTimer = null; }
+  try {
+    // Clear any existing timer
+    if (songTimer) { clearTimeout(songTimer); songTimer = null; }
 
-  // Mark current as done
-  db.prepare(`UPDATE songs SET status = 'played' WHERE status = 'playing'`).run();
+    // Mark current as done
+    db.prepare(`UPDATE songs SET status = 'played' WHERE status = 'playing'`).run();
 
-  const next = db.prepare(`
-    SELECT * FROM songs WHERE status = 'queued'
-    ORDER BY upvotes DESC, created_at ASC LIMIT 1
-  `).get();
+    const next = db.prepare(`
+      SELECT * FROM songs WHERE status = 'queued'
+      ORDER BY upvotes DESC, created_at ASC LIMIT 1
+    `).get();
 
-  if (next) {
-    // Pre-download audio during announcement so it's ready when clients need it
-    if (next.type === 'youtube') {
-      ensureAudio(next.source).catch(err => console.error('Pre-download failed:', err.message));
-    }
+    if (next) {
+      // Pre-download audio during announcement so it's ready when clients need it
+      if (next.type === 'youtube') {
+        try { ensureAudio(next.source); } catch (err) { console.error('Pre-download failed:', err.message); }
+      }
 
-    // Announce phase
-    playbackState = {
-      currentSong: next,
-      startedAt: null,
-      isAnnouncing: true,
-    };
-    broadcastState();
-    io.emit('announcement', {
-      name: next.user_name,
-      floor: next.user_floor,
-      title: next.title,
-    });
-
-    // After announcement, start playing
-    setTimeout(() => {
-      db.prepare(`UPDATE songs SET status = 'playing' WHERE id = ?`).run(next.id);
+      // Announce phase
       playbackState = {
         currentSong: next,
-        startedAt: Date.now(),
-        isAnnouncing: false,
+        startedAt: null,
+        isAnnouncing: true,
       };
       broadcastState();
-      advancing = false;
+      io.emit('announcement', {
+        name: next.user_name,
+        floor: next.user_floor,
+        title: next.title,
+      });
 
-      // Server timer: auto-advance when song duration is up
-      // Use stored duration, or fallback to 4 minutes
-      const durationMs = (next.duration > 0 ? next.duration : 240) * 1000;
-      // Add 2s buffer for network lag
-      songTimer = setTimeout(() => {
-        advanceQueue();
-      }, durationMs + 2000);
-    }, 3500);
-  } else {
-    playbackState = { currentSong: null, startedAt: null, isAnnouncing: false };
-    broadcastState();
+      // After announcement, start playing
+      setTimeout(() => {
+        db.prepare(`UPDATE songs SET status = 'playing' WHERE id = ?`).run(next.id);
+        playbackState = {
+          currentSong: next,
+          startedAt: Date.now(),
+          isAnnouncing: false,
+        };
+        broadcastState();
+        advancing = false;
+
+        // Server timer: auto-advance when song duration is up
+        // Use stored duration, or fallback to 4 minutes
+        const durationMs = (next.duration > 0 ? next.duration : 240) * 1000;
+        // Add 2s buffer for network lag
+        songTimer = setTimeout(() => {
+          advanceQueue();
+        }, durationMs + 2000);
+      }, 3500);
+    } else {
+      playbackState = { currentSong: null, startedAt: null, isAnnouncing: false };
+      broadcastState();
+      advancing = false;
+    }
+  } catch (err) {
+    console.error('advanceQueue error:', err);
     advancing = false;
   }
 }
