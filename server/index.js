@@ -97,6 +97,25 @@ console.log(`ffmpeg available: ${HAS_FFMPEG}`);
 const AUDIO_EXT = HAS_FFMPEG ? 'mp3' : 'm4a';
 const AUDIO_CONTENT_TYPE = HAS_FFMPEG ? 'audio/mpeg' : 'audio/mp4';
 
+// Cache of direct YouTube CDN URLs resolved at queue time (videoId -> url)
+const directUrlCache = new Map();
+
+function resolveDirectUrl(videoId) {
+  if (directUrlCache.has(videoId)) return;
+  const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const args = ['-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--retries', '3'];
+  if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
+  args.push(ytUrl);
+  execFile('yt-dlp', args, { timeout: 30000 }, (err, stdout) => {
+    if (!err && stdout.trim()) {
+      directUrlCache.set(videoId, stdout.trim());
+      console.log(`Direct URL cached for ${videoId}`);
+    } else {
+      console.error(`Direct URL failed for ${videoId}:`, err?.message);
+    }
+  });
+}
+
 function startDownload(videoId) {
   if (activeDownloads.has(videoId)) return activeDownloads.get(videoId);
 
@@ -296,19 +315,9 @@ function advanceQueue() {
         try { ensureAudio(next.source); } catch (err) { console.error('Pre-download failed:', err.message); }
       }
 
-      // Resolve direct YouTube CDN URL during announcement for instant playback
-      let directUrl = null;
+      // Resolve direct URL if not already cached (fallback, normally done at queue time)
       if (next.type === 'youtube') {
-        const ytUrl = `https://www.youtube.com/watch?v=${next.source}`;
-        const args = ['-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--retries', '3'];
-        if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
-        args.push(ytUrl);
-        execFile('yt-dlp', args, { timeout: 10000 }, (err, stdout) => {
-          if (!err && stdout.trim()) {
-            directUrl = stdout.trim();
-            console.log(`Direct URL resolved for ${next.source}`);
-          }
-        });
+        resolveDirectUrl(next.source);
       }
 
       // Announce phase
@@ -331,7 +340,7 @@ function advanceQueue() {
           currentSong: next,
           startedAt: Date.now(),
           isAnnouncing: false,
-          directUrl,
+          directUrl: directUrlCache.get(next.source) || null,
         };
         broadcastState();
         advancing = false;
@@ -422,8 +431,9 @@ app.post('/api/songs/youtube', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(song.id, song.title, song.type, song.source, song.user_id, song.user_name, song.user_floor, song.status, song.upvotes, song.duration, song.created_at);
 
-  // Start downloading audio immediately so it's cached by the time it plays
+  // Start downloading audio + resolve direct URL immediately so it's ready by play time
   try { ensureAudio(videoId); } catch (err) { console.error('Pre-download failed:', err.message); }
+  resolveDirectUrl(videoId);
 
   broadcastActivity(`🎵 ${userName} from Floor ${userFloor} just queued up "${song.title}"`);
   broadcastState();
