@@ -333,8 +333,8 @@ function advanceQueue() {
         title: next.title,
       });
 
-      // After announcement, start playing
-      setTimeout(() => {
+      // After announcement + URL ready, start playing
+      const startPlayback = () => {
         db.prepare(`UPDATE songs SET status = 'playing' WHERE id = ?`).run(next.id);
         playbackState = {
           currentSong: next,
@@ -352,7 +352,24 @@ function advanceQueue() {
         songTimer = setTimeout(() => {
           advanceQueue();
         }, durationMs + 2000);
-      }, 3500);
+      };
+
+      // Wait for announcement (3.5s minimum) + direct URL resolution (up to 10s max)
+      const needsUrl = next.type === 'youtube' && !directUrlCache.has(next.source);
+      if (!needsUrl) {
+        setTimeout(startPlayback, 3500);
+      } else {
+        const startTime = Date.now();
+        const checkUrl = setInterval(() => {
+          const elapsed = Date.now() - startTime;
+          if (directUrlCache.has(next.source) || elapsed >= 10000) {
+            clearInterval(checkUrl);
+            // Ensure at least 3.5s of announcement
+            const remaining = Math.max(0, 3500 - elapsed);
+            setTimeout(startPlayback, remaining);
+          }
+        }, 300);
+      }
     } else {
       playbackState = { currentSong: null, startedAt: null, isAnnouncing: false };
       broadcastState();
