@@ -6,7 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
-const { execSync, execFile, spawn } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const db = require('./db');
 
 // Write YouTube cookies from env var to file (for cloud deploys)
@@ -84,153 +84,8 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// Audio cache: stream via yt-dlp, use ffmpeg for MP3 if available
-const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-const activeDownloads = new Map(); // videoId -> { proc, listeners, chunks }
-
-// Detect ffmpeg availability at startup
-let HAS_FFMPEG = false;
-try { execSync('ffmpeg -version', { stdio: 'ignore' }); HAS_FFMPEG = true; } catch {}
-console.log(`ffmpeg available: ${HAS_FFMPEG}`);
-
-const AUDIO_EXT = HAS_FFMPEG ? 'mp3' : 'm4a';
-const AUDIO_CONTENT_TYPE = HAS_FFMPEG ? 'audio/mpeg' : 'audio/mp4';
-
-// Cache of direct YouTube CDN URLs resolved at queue time (videoId -> url)
-const directUrlCache = new Map();
-
-function resolveDirectUrl(videoId) {
-  if (directUrlCache.has(videoId)) return;
-  const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const args = ['-g', '-f', 'bestaudio[ext=m4a]/bestaudio', '--retries', '3'];
-  if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
-  args.push(ytUrl);
-  execFile('yt-dlp', args, { timeout: 30000 }, (err, stdout) => {
-    if (!err && stdout.trim()) {
-      directUrlCache.set(videoId, stdout.trim());
-      console.log(`Direct URL cached for ${videoId}`);
-    } else {
-      console.error(`Direct URL failed for ${videoId}:`, err?.message);
-    }
-  });
-}
-
-function startDownload(videoId) {
-  if (activeDownloads.has(videoId)) return activeDownloads.get(videoId);
-
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
-  const tmpPath = filePath + '.tmp';
-  const fileStream = fs.createWriteStream(tmpPath);
-
-  console.log(`Streaming audio for ${videoId} (format: ${AUDIO_EXT})...`);
-
-  let outputStream;
-  let download;
-
-  if (HAS_FFMPEG) {
-    // yt-dlp → ffmpeg → MP3 pipeline
-    const ytArgs = ['-f', 'bestaudio', '-o', '-', '--retries', '3'];
-    if (fs.existsSync(COOKIES_PATH)) ytArgs.push('--cookies', COOKIES_PATH);
-    ytArgs.push(url);
-
-    const ytdlp = spawn('yt-dlp', ytArgs);
-    const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-ab', '192k', 'pipe:1'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    ytdlp.stdout.pipe(ffmpeg.stdin);
-    ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-    ffmpeg.stderr.on('data', () => {});
-
-    outputStream = ffmpeg.stdout;
-    download = { proc: ffmpeg, ytdlp, listeners: new Set(), chunks: [] };
-
-    ytdlp.on('error', () => ffmpeg.stdin.end());
-    ffmpeg.on('error', () => {
-      for (const listener of download.listeners) listener.end();
-      activeDownloads.delete(videoId);
-    });
-  } else {
-    // Direct yt-dlp → m4a (AAC) stream, no ffmpeg needed
-    const ytArgs = ['-f', 'bestaudio[ext=m4a]/bestaudio', '-o', '-', '--retries', '3'];
-    if (fs.existsSync(COOKIES_PATH)) ytArgs.push('--cookies', COOKIES_PATH);
-    ytArgs.push(url);
-
-    const ytdlp = spawn('yt-dlp', ytArgs);
-    ytdlp.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-
-    outputStream = ytdlp.stdout;
-    download = { proc: ytdlp, listeners: new Set(), chunks: [] };
-
-    ytdlp.on('error', () => {
-      for (const listener of download.listeners) listener.end();
-      activeDownloads.delete(videoId);
-    });
-  }
-
-  activeDownloads.set(videoId, download);
-
-  outputStream.on('data', (chunk) => {
-    download.chunks.push(chunk);
-    fileStream.write(chunk);
-    for (const listener of download.listeners) {
-      listener.write(chunk);
-    }
-  });
-
-  download.proc.on('close', (code) => {
-    fileStream.end();
-    for (const listener of download.listeners) {
-      listener.end();
-    }
-    activeDownloads.delete(videoId);
-    if (code === 0 && fs.existsSync(tmpPath)) {
-      fs.renameSync(tmpPath, filePath);
-      console.log(`Cached audio for ${videoId}`);
-    } else {
-      fs.unlink(tmpPath, () => {});
-    }
-  });
-
-  return download;
-}
-
-// Pre-download: start the pipeline early so data is ready
-function ensureAudio(videoId) {
-  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
-  if (fs.existsSync(filePath)) return;
-  startDownload(videoId);
-}
-
-// Stream YouTube audio
-app.get('/api/stream/:videoId', (req, res) => {
-  const videoId = req.params.videoId;
-  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-    return res.status(400).json({ error: 'Invalid video ID' });
-  }
-
-  // Already cached — serve from disk (instant)
-  const filePath = path.join(CACHE_DIR, `${videoId}.${AUDIO_EXT}`);
-  if (fs.existsSync(filePath)) {
-    res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
-    return fs.createReadStream(filePath).pipe(res);
-  }
-
-  // Pre-resolved direct URL — redirect to YouTube CDN (instant)
-  if (directUrlCache.has(videoId)) {
-    return res.redirect(directUrlCache.get(videoId));
-  }
-
-  // Stream through server (fallback)
-  res.setHeader('Content-Type', AUDIO_CONTENT_TYPE);
-  const download = startDownload(videoId);
-  for (const chunk of download.chunks) {
-    res.write(chunk);
-  }
-  download.listeners.add(res);
-  res.on('close', () => download.listeners.delete(res));
-});
+// YouTube audio is now played client-side via YouTube IFrame player.
+// No server-side downloading needed — saves memory and CPU.
 
 // File upload config
 const storage = multer.diskStorage({
@@ -315,16 +170,6 @@ function advanceQueue() {
     `).get();
 
     if (next) {
-      // Pre-download audio for caching
-      if (next.type === 'youtube') {
-        try { ensureAudio(next.source); } catch (err) { console.error('Pre-download failed:', err.message); }
-      }
-
-      // Resolve direct URL if not already cached (fallback, normally done at queue time)
-      if (next.type === 'youtube') {
-        resolveDirectUrl(next.source);
-      }
-
       // Announce phase
       playbackState = {
         currentSong: next,
@@ -338,53 +183,23 @@ function advanceQueue() {
         title: next.title,
       });
 
-      // After announcement + URL ready, start playing
-      const startPlayback = () => {
+      // After announcement, start playing
+      setTimeout(() => {
         db.prepare(`UPDATE songs SET status = 'playing' WHERE id = ?`).run(next.id);
         playbackState = {
           currentSong: next,
           startedAt: Date.now(),
           isAnnouncing: false,
-          directUrl: directUrlCache.get(next.source) || null,
         };
         broadcastState();
         advancing = false;
 
-        // Pre-download and resolve the NEXT song in queue while this one plays
-        const upcoming = db.prepare(`
-          SELECT * FROM songs WHERE status = 'queued' AND id != ?
-          ORDER BY upvotes DESC, created_at ASC LIMIT 1
-        `).get(next.id);
-        if (upcoming && upcoming.type === 'youtube') {
-          try { ensureAudio(upcoming.source); } catch {}
-          resolveDirectUrl(upcoming.source);
-        }
-
         // Server timer: auto-advance when song duration is up
-        // Use stored duration, or fallback to 4 minutes
         const durationMs = (next.duration > 0 ? next.duration : 240) * 1000;
-        // Add 2s buffer for network lag
         songTimer = setTimeout(() => {
           advanceQueue();
         }, durationMs + 2000);
-      };
-
-      // Wait for announcement (3.5s minimum) + direct URL resolution (up to 10s max)
-      const needsUrl = next.type === 'youtube' && !directUrlCache.has(next.source);
-      if (!needsUrl) {
-        setTimeout(startPlayback, 3500);
-      } else {
-        const startTime = Date.now();
-        const checkUrl = setInterval(() => {
-          const elapsed = Date.now() - startTime;
-          if (directUrlCache.has(next.source) || elapsed >= 10000) {
-            clearInterval(checkUrl);
-            // Ensure at least 3.5s of announcement
-            const remaining = Math.max(0, 3500 - elapsed);
-            setTimeout(startPlayback, remaining);
-          }
-        }, 300);
-      }
+      }, 3500);
     } else {
       playbackState = { currentSong: null, startedAt: null, isAnnouncing: false };
       broadcastState();
@@ -462,10 +277,6 @@ app.post('/api/songs/youtube', (req, res) => {
     INSERT INTO songs (id, title, type, source, user_id, user_name, user_floor, status, upvotes, duration, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(song.id, song.title, song.type, song.source, song.user_id, song.user_name, song.user_floor, song.status, song.upvotes, song.duration, song.created_at);
-
-  // Start downloading audio + resolve direct URL immediately so it's ready by play time
-  try { ensureAudio(videoId); } catch (err) { console.error('Pre-download failed:', err.message); }
-  resolveDirectUrl(videoId);
 
   broadcastActivity(`🎵 ${userName} from Floor ${userFloor} just queued up "${song.title}"`);
   broadcastState();
