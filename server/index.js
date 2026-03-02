@@ -84,62 +84,81 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '..', 'build')));
 }
 
-// Audio cache: download once per song, serve to all listeners
+// Audio cache: download once per song, stream immediately, serve cached for subsequent listeners
 const CACHE_DIR = path.join(__dirname, '..', 'audio-cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-const downloadInProgress = new Map(); // videoId -> Promise<filePath>
-
-function downloadAudio(videoId) {
-  if (downloadInProgress.has(videoId)) return downloadInProgress.get(videoId);
-
-  const filePath = path.join(CACHE_DIR, `${videoId}.webm`);
-  if (fs.existsSync(filePath)) return Promise.resolve(filePath);
-
-  const promise = new Promise((resolve, reject) => {
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytArgs = ['-f', 'bestaudio', '-o', filePath, '--retries', '3'];
-    if (fs.existsSync(COOKIES_PATH)) {
-      ytArgs.push('--cookies', COOKIES_PATH);
-    }
-    ytArgs.push(url);
-
-    console.log(`Downloading audio for ${videoId}...`);
-    const proc = spawn('yt-dlp', ytArgs);
-    proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
-    proc.on('close', (code) => {
-      downloadInProgress.delete(videoId);
-      if (code === 0 && fs.existsSync(filePath)) {
-        console.log(`Cached audio for ${videoId}`);
-        resolve(filePath);
-      } else {
-        reject(new Error(`yt-dlp exited with code ${code}`));
-      }
-    });
-    proc.on('error', (err) => {
-      downloadInProgress.delete(videoId);
-      reject(err);
-    });
-  });
-
-  downloadInProgress.set(videoId, promise);
-  return promise;
-}
+const activeDownloads = new Map(); // videoId -> { proc, listeners: Set<res> }
 
 // Stream YouTube audio via yt-dlp (cached)
-app.get('/api/stream/:videoId', async (req, res) => {
+app.get('/api/stream/:videoId', (req, res) => {
   const videoId = req.params.videoId;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  try {
-    const filePath = await downloadAudio(videoId);
-    res.setHeader('Content-Type', 'audio/webm');
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    console.error(`Stream failed for ${videoId}:`, err.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Stream failed' });
+  res.setHeader('Content-Type', 'audio/webm');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  // Already cached — serve from disk
+  const filePath = path.join(CACHE_DIR, `${videoId}.webm`);
+  if (fs.existsSync(filePath)) {
+    return fs.createReadStream(filePath).pipe(res);
   }
+
+  // Download already in progress — tee the stream to this listener too
+  if (activeDownloads.has(videoId)) {
+    activeDownloads.get(videoId).listeners.add(res);
+    res.on('close', () => activeDownloads.get(videoId)?.listeners.delete(res));
+    return;
+  }
+
+  // Start new download: stream to this listener + write to cache file
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const ytArgs = ['-f', 'bestaudio', '-o', '-', '--retries', '3'];
+  if (fs.existsSync(COOKIES_PATH)) {
+    ytArgs.push('--cookies', COOKIES_PATH);
+  }
+  ytArgs.push(url);
+
+  console.log(`Downloading audio for ${videoId}...`);
+  const proc = spawn('yt-dlp', ytArgs);
+  const tmpPath = filePath + '.tmp';
+  const fileStream = fs.createWriteStream(tmpPath);
+  const download = { proc, listeners: new Set([res]) };
+  activeDownloads.set(videoId, download);
+
+  proc.stdout.on('data', (chunk) => {
+    fileStream.write(chunk);
+    for (const listener of download.listeners) {
+      listener.write(chunk);
+    }
+  });
+
+  proc.stderr.on('data', (d) => console.error('yt-dlp:', d.toString().trim()));
+
+  proc.on('close', (code) => {
+    fileStream.end();
+    for (const listener of download.listeners) {
+      listener.end();
+    }
+    activeDownloads.delete(videoId);
+    if (code === 0) {
+      fs.renameSync(tmpPath, filePath);
+      console.log(`Cached audio for ${videoId}`);
+    } else {
+      fs.unlink(tmpPath, () => {});
+    }
+  });
+
+  proc.on('error', () => {
+    for (const listener of download.listeners) {
+      if (!listener.headersSent) listener.status(500).end();
+      else listener.end();
+    }
+    activeDownloads.delete(videoId);
+  });
+
+  res.on('close', () => download.listeners.delete(res));
 });
 
 // File upload config
