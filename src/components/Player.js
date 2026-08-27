@@ -5,22 +5,36 @@ const API_BASE = process.env.NODE_ENV === 'production' ? '' : `http://${window.l
 
 // Load YouTube IFrame API once
 let ytApiReady = false;
+let ytApiFailed = false;
 let ytApiCallbacks = [];
+
+function flushYTCallbacks(ready) {
+  const callbacks = ytApiCallbacks;
+  ytApiCallbacks = [];
+  callbacks.forEach(cb => cb(ready));
+}
+
 if (!window.YT) {
   const tag = document.createElement('script');
   tag.src = 'https://www.youtube.com/iframe_api';
+  // If the API can't load (offline, blocked, ad blocker) nothing would ever call
+  // onYouTubeIframeAPIReady, so waiters must be released to use the fallback.
+  tag.onerror = () => {
+    ytApiFailed = true;
+    flushYTCallbacks(false);
+  };
   document.head.appendChild(tag);
   window.onYouTubeIframeAPIReady = () => {
     ytApiReady = true;
-    ytApiCallbacks.forEach(cb => cb());
-    ytApiCallbacks = [];
+    flushYTCallbacks(true);
   };
 } else {
   ytApiReady = true;
 }
 
 function onYTReady(cb) {
-  if (ytApiReady) cb();
+  if (ytApiReady) cb(true);
+  else if (ytApiFailed) cb(false);
   else ytApiCallbacks.push(cb);
 }
 
@@ -106,9 +120,23 @@ export default function Player() {
         container.appendChild(playerDiv);
       }
 
-      onYTReady(() => {
+      const fallbackToStream = () => {
+        destroyYTPlayer();
+        setUseYT(false);
+        const audio = audioRef.current;
+        audio.src = `${API_BASE}/api/stream/${currentSong.source}`;
+        audio.play().catch(() => {});
+      };
+
+      onYTReady((apiReady) => {
         // Re-check in case song changed during API load
         if (currentSongIdRef.current !== currentSong.id) return;
+
+        if (!apiReady) {
+          console.warn('YT IFrame API unavailable, falling back to audio stream');
+          fallbackToStream();
+          return;
+        }
 
         try {
           ytPlayerRef.current = new window.YT.Player('yt-player', {
@@ -155,14 +183,6 @@ export default function Player() {
           fallbackToStream();
         }
       });
-
-      const fallbackToStream = () => {
-        destroyYTPlayer();
-        setUseYT(false);
-        const audio = audioRef.current;
-        audio.src = `${API_BASE}/api/stream/${currentSong.source}`;
-        audio.play().catch(() => {});
-      };
     } else {
       destroyYTPlayer();
       const audio = audioRef.current;
