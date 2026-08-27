@@ -45,10 +45,15 @@ async function searchYouTube(query) {
       'Accept-Language': 'en-US,en;q=0.9',
     },
   });
+  if (!res.ok) {
+    throw new Error(`YouTube responded with HTTP ${res.status}`);
+  }
   const html = await res.text();
 
   const match = html.match(/var ytInitialData = ({.*?});<\/script>/s);
-  if (!match) return [];
+  if (!match) {
+    throw new Error('could not parse the YouTube results page');
+  }
 
   const data = JSON.parse(match[1]);
   const contents = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
@@ -310,7 +315,7 @@ app.get('/api/search', async (req, res) => {
     res.json(results);
   } catch (err) {
     console.error('YouTube search error:', err);
-    res.status(500).json({ error: 'Search failed. Try again.' });
+    res.status(502).json({ error: `YouTube search unavailable: ${err.message}` });
   }
 });
 
@@ -406,6 +411,13 @@ app.post('/api/songs/:id/remove', (req, res) => {
 app.post('/api/songs/:id/vote', (req, res) => {
   const { id } = req.params;
   const { userId, direction } = req.body; // direction: 'up' or 'down'
+
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  if (direction !== 'up' && direction !== 'down') {
+    return res.status(400).json({ error: "Vote direction must be 'up' or 'down'" });
+  }
+  const target = db.prepare(`SELECT id FROM songs WHERE id = ?`).get(id);
+  if (!target) return res.status(404).json({ error: 'Song not found' });
 
   const existing = db.prepare(`SELECT * FROM votes WHERE song_id = ? AND user_id = ?`).get(id, userId);
 
@@ -587,6 +599,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
+
 server.listen(PORT, () => {
   console.log(`🗼 Frontier Tower Radio server broadcasting on port ${PORT}`);
 });
