@@ -5,4 +5,7 @@ radio.db-shm
 radio.db-wal
 uploads
 .git
+.env
+.env.*
+cookies.txt
 *-player-script.js
