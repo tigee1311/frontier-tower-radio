@@ -5,11 +5,14 @@
   "private": true,
   "scripts": {
     "start": "concurrently \"npm run server\" \"npm run client\"",
-    "server": "node server/index.js",
+    "server": "node --env-file-if-exists=.env server/index.js",
     "client": "react-scripts start",
     "build": "react-scripts build"
   },
   "proxy": "http://localhost:3001",
+  "engines": {
+    "node": ">=22.9.0"
+  },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
     "better-sqlite3": "^11.7.0",
