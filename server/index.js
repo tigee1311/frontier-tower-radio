@@ -600,6 +600,14 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Set PORT to a free port and try again.`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   console.log(`🗼 Frontier Tower Radio server broadcasting on port ${PORT}`);
 });
