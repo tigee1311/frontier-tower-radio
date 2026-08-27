@@ -2,7 +2,21 @@ services:
   - type: web
     name: frontier-tower-radio
     runtime: docker
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /api/state
     envVars:
       - key: NODE_ENV
         value: production
+      # Admin panel PIN. Set this — the code falls back to a public default.
+      - key: ADMIN_PIN
+        sync: false
+      # Optional: enables the $1 "paid skip" Stripe Checkout flow.
+      # Without them /api/skip/checkout returns 500 "Payments not configured".
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      # Optional: Netscape-format YouTube cookies, used by the yt-dlp fallback
+      # stream when YouTube rate-limits the datacenter IP.
+      - key: YT_COOKIES
+        sync: false
